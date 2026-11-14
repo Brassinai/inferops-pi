@@ -1,0 +1,8 @@
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "infercloud": {
+      "baseUrl": "http://127.0.0.1:8081/v1"
+    }
+  }
+}
