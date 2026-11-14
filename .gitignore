@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.tmp/
+.env
+.env.*
+!.env.example
+*.tgz
+*.log
+.DS_Store
+
+# Local integration tracker; never commit or publish.
+/tasks.md
