@@ -1,0 +1,58 @@
+name: Synthetic gateway accounting
+
+on:
+  workflow_dispatch:
+    inputs:
+      infercloud_ref:
+        description: InferCloud commit or branch containing the Pi accounting test
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  accounting:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pi_test
+          POSTGRES_PASSWORD: synthetic_ci_password
+          POSTGRES_DB: pi_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pi_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: infercloud-pi
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Brassinai/infercloud
+          ref: ${{ inputs.infercloud_ref }}
+          path: infercloud
+          persist-credentials: false
+          token: ${{ secrets.INFERCLOUD_READ_TOKEN || github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: npm
+          cache-dependency-path: infercloud-pi/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infercloud/go.mod
+          cache-dependency-path: infercloud/go.sum
+      - run: npm ci --ignore-scripts
+        working-directory: infercloud-pi
+      - name: Require the accounting test in the selected InferCloud revision
+        run: test -f cmd/gateway/pi_accounting_integration_test.go
+        working-directory: infercloud
+      - run: go test ./cmd/gateway -run '^TestPiGatewayAccountingPostgres$' -count=1 -v
+        working-directory: infercloud
+        env:
+          INFERCLOUD_PI_TEST_DIRECTORY: ${{ github.workspace }}/infercloud-pi
+          INFERCLOUD_TEST_DATABASE_URL: postgres://pi_test:synthetic_ci_password@127.0.0.1:5432/pi_test?sslmode=disable
