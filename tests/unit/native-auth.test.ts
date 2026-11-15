@@ -7,7 +7,7 @@ import { ModelRuntime, readStoredCredential, resolveModelScopeWithDiagnostics } 
 import type { AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 import { createInferCloudProvider } from "../../src/provider/infercloud.js";
 import { DEFAULT_BASE_URL } from "../../src/auth/config.js";
-import { verifiedCatalog } from "../fixtures/catalog.js";
+import { projectCatalog, verifiedCatalog } from "../fixtures/catalog.js";
 
 const signal = () => new AbortController().signal;
 
@@ -34,6 +34,18 @@ test("native API-key login uses Pi's secret prompt, validates before persistence
   } finally { connection.dispose(); }
 });
 
+test("valid login explains configured but unverified models without making them selectable", async () => {
+  const payload = projectCatalog();
+  payload.data.shift();
+  const connection = createInferCloudProvider({ env: () => ({}), fetch: async () => Response.json(payload) });
+  const notices: string[] = [];
+  const credential = await connection.provider.auth.apiKey!.login!({ ...interaction("synthetic-key", [], notices), signal: signal() });
+  assert.equal(credential.type, "api_key");
+  assert.ok(notices.some((notice) => notice.includes("synthetic-vision: tooling enabled") && notice.includes("verification is missing")));
+  assert.deepEqual(connection.provider.getModels(), []);
+  connection.dispose();
+});
+
 test("Pi owns saved credentials, rotation, logout, restart, and scoped model resolution", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "infercloud-native-auth-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -42,13 +54,18 @@ test("Pi owns saved credentials, rotation, logout, restart, and scoped model res
   let status = 200; let empty = false; let calls = 0;
   const keys: string[] = [];
   const make = async () => {
-    const connection = createInferCloudProvider({ env: () => ({}), fetch: async (url, init) => {
+    const runtime = await ModelRuntime.create({ authPath, modelsPath, refreshOnCreate: false });
+    const initialBaseUrl = runtime.getProvider("infercloud")?.baseUrl;
+    assert.equal(initialBaseUrl, "https://custom.invalid/v1");
+    assert.ok(initialBaseUrl);
+    // Match extension startup: compose the endpoint before registration's
+    // asynchronous cache refresh can race with login.
+    const connection = createInferCloudProvider({ env: () => ({}), initialBaseUrl, fetch: async (url, init) => {
       calls++; assert.ok(String(url).startsWith("https://custom.invalid/v1/models?"));
       keys.push(new Headers(init?.headers).get("authorization") ?? "");
       return Response.json(status === 200 ? empty ? { object: "list", data: [] } : verifiedCatalog() : { error: { code: "invalid_api_key", message: "private-canary" } }, { status });
     } });
     t.after(() => connection.dispose());
-    const runtime = await ModelRuntime.create({ authPath, modelsPath, refreshOnCreate: false });
     runtime.registerNativeProvider(connection.provider);
     await runtime.refresh({ providers: ["infercloud"], allowNetwork: false });
     return { connection, runtime };

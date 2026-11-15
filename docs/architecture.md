@@ -40,9 +40,12 @@ The existing gateway exposes `GET /v1/models` and `POST /v1/chat/completions`.
 Use the inference gateway URL, including `/v1`, as the base URL. The dashboard
 management API and inference gateway can have different origins.
 
-The basic model list exposes model identifiers. `GET /v1/models?include=metadata&profile=text-coding`
-adds InferCloud metadata schema version 1 for project-eligible context/output
-limits, capabilities, and pricing. See [model metadata](model-metadata.md).
+The basic model list exposes model identifiers. `GET /v1/models?include=metadata`
+adds InferCloud metadata schema version 1, provider-reported tooling configuration,
+and per-profile availability. Pi selects models using the `text-coding` profile's
+verified context/output limits, capabilities and pricing, and explains excluded
+models in availability notices. Legacy gateways use a filtered profile lookup.
+See [model metadata](model-metadata.md).
 Provider reports and unknown capabilities are not verified execution guarantees.
 
 Routing can select multiple offerings for one model. The text-coding profile requires fresh cloud-operator

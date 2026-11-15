@@ -9,3 +9,19 @@ export function verifiedCatalog(now = Date.now()) {
       input: rate, output: rate, cacheRead: rate, cacheWrite: rate },
   } }] };
 }
+
+export function projectCatalog(now = Date.now()) {
+  const coding = verifiedCatalog(now).data[0]!;
+  const verified = coding.infercloud;
+  const unknown = { chatCompletions: "Unknown", streaming: "Unknown", toolCalling: "Unknown", textInput: "Unknown", imageInput: "Unknown", reasoning: "Unknown" };
+  const profile = { available: true, reasons: [] as string[], verificationExpiresAt: verified.verificationExpiresAt,
+    capabilities: verified.capabilities, limits: verified.limits, pricing: verified.pricing };
+  return { object: "list", data: [
+    { ...coding, infercloud: { ...verified, routingProfile: undefined, routingEnforced: false, capabilities: unknown,
+      tooling: { state: "Enabled", source: "ProviderReported" }, profiles: { "text-coding": profile } } },
+    { id: "synthetic-vision", object: "model", owned_by: "infercloud", infercloud: { ...verified,
+      routingProfile: undefined, routingEnforced: false, capabilities: unknown,
+      tooling: { state: "Enabled", source: "ProviderReported" }, profiles: { "text-coding": { ...profile,
+        available: false, reasons: ["capability_verification_missing_or_revoked"], capabilities: unknown } } } },
+  ] };
+}

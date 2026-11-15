@@ -4,7 +4,10 @@ import { createInferCloudProvider, PROVIDER_ID } from "./provider/infercloud.js"
 export default async function infercloudExtension(pi: ExtensionAPI): Promise<void> {
   const startup = process.env.PI_OFFLINE === undefined ? await ModelRuntime.create({ refreshOnCreate: false }) : undefined;
   const initialBaseUrl = startup?.getProvider(PROVIDER_ID)?.baseUrl;
-  const connection = createInferCloudProvider(initialBaseUrl ? { initialBaseUrl } : {});
+  let showAvailability: (notice: string | undefined) => void = () => {};
+  const connection = createInferCloudProvider({ ...(initialBaseUrl ? { initialBaseUrl } : {}),
+    onAvailabilityChange: (notice) => showAvailability(notice),
+  });
   // Pi resolves startup defaults, CLI selection, and scopes before its background
   // refresh. Use its public runtime to compose models.json and native credentials
   // before publishing this dynamic provider. No separate credential store.
@@ -24,7 +27,15 @@ export default async function infercloudExtension(pi: ExtensionAPI): Promise<voi
     } catch { /* Native /login and /model surface connection failures without blocking Pi startup. */ }
   }
   pi.registerProvider(connection.provider);
-  pi.on("session_shutdown", () => connection.dispose());
+  let lastNotice: string | undefined;
+  pi.on("session_start", async (_event, ctx) => {
+    showAvailability = (notice) => {
+      if (notice && notice !== lastNotice && ctx.hasUI) ctx.ui.notify(notice, "info");
+      lastNotice = notice;
+    };
+    showAvailability(connection.getAvailabilityNotice());
+  });
+  pi.on("session_shutdown", () => { showAvailability = () => {}; connection.dispose(); });
   pi.on("before_agent_start", async (_event, ctx) => {
     if (ctx.model?.provider !== PROVIDER_ID || process.env.PI_OFFLINE !== undefined) return;
     await ctx.modelRegistry.refresh({ providers: [PROVIDER_ID], signal: ctx.signal ?? AbortSignal.timeout(10_000) });

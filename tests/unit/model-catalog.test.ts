@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mapModelCatalog } from "../../src/models/catalog.js";
+import { catalogNotice, mapModelCatalog } from "../../src/models/catalog.js";
+import { projectCatalog } from "../fixtures/catalog.js";
 
 function catalog() {
   const range = (minUSD: string, maxUSD = minUSD) => ({ minUSD, maxUSD });
@@ -84,4 +85,34 @@ test("reject malformed envelopes and duplicate IDs without reflecting raw payloa
   payload.data.push(structuredClone(payload.data[0]!));
   assert.deepEqual(mapModelCatalog(payload).models, []);
   assert.deepEqual(mapModelCatalog({ object: "list", data: [] }), { models: [] });
+});
+
+test("project discovery distinguishes configured tooling from verified coding availability", () => {
+  const mapped = mapModelCatalog(projectCatalog());
+  assert.deepEqual(mapped.models.map(({ definition }) => definition.id), ["synthetic-coder"]);
+  assert.deepEqual(mapped.unavailable, [{ id: "synthetic-vision", tooling: "Enabled", reason: "cloud capability verification is missing or revoked" }]);
+  assert.match(catalogNotice(mapped) ?? "", /2 project model\(s\); 1 ready/);
+  assert.match(catalogNotice(mapped) ?? "", /synthetic-vision: tooling enabled \(provider reported\)/);
+});
+
+test("availability notices whitelist reason codes and bound model identifiers", () => {
+  const payload = projectCatalog();
+  payload.data[1]!.infercloud.profiles["text-coding"].reasons = ["private-body-canary"];
+  let mapping = mapModelCatalog(payload);
+  assert.ok(!catalogNotice(mapping)?.includes("private-body-canary"));
+  payload.data[1]!.id = "bad\u001b[31m\ncanary";
+  mapping = mapModelCatalog(payload);
+  assert.equal(mapping.unavailable, undefined);
+});
+
+test("profile prices and token limits are used instead of general catalog values", () => {
+  const payload = projectCatalog();
+  payload.data[0]!.infercloud.limits = { contextWindow: { tokens: 1, verification: "ProviderReported" }, maxOutput: { tokens: 1, verification: "ProviderReported" } };
+  payload.data[0]!.infercloud.pricing = { ...payload.data[0]!.infercloud.pricing, state: "Unknown" };
+  const model = mapModelCatalog(payload).models[0]!;
+  assert.equal(model.definition.contextWindow, 8192);
+  assert.equal(model.definition.maxTokens, 512);
+  assert.equal(model.definition.cost?.input, 0.1);
+  payload.data[0]!.infercloud.profiles["text-coding"].verificationExpiresAt = "2000-01-01T00:00:00Z";
+  assert.equal(mapModelCatalog(payload).models.length, 0);
 });

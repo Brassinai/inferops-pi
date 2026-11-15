@@ -32,8 +32,7 @@ export async function discoverModels(options: {
   const signal = AbortSignal.any([options.signal, timeout]);
   const url = new URL(`${options.baseUrl}/models`);
   url.searchParams.set("include", "metadata");
-  url.searchParams.set("profile", "text-coding");
-  try {
+  const loadCatalog = async (): Promise<unknown> => {
     signal.throwIfAborted();
     const response = await (options.fetch ?? globalThis.fetch)(url, {
       headers: { Authorization: `Bearer ${options.apiKey}`, Accept: "application/json", "Cache-Control": "no-store" },
@@ -62,12 +61,33 @@ export async function discoverModels(options: {
     } finally { reader.releaseLock(); }
     signal.throwIfAborted();
     try {
-      return mapModelCatalog(JSON.parse(Buffer.concat(chunks).toString("utf8")), options.now ?? Date.now());
+      return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
     } catch { throw new DiscoveryError("invalid_catalog"); }
+  };
+  try {
+    const payload = await loadCatalog();
+    const mapping = mapModelCatalog(payload, options.now ?? Date.now());
+    const data = (payload as { data: unknown[] }).data;
+    const records = data.filter((entry): entry is { id: string; infercloud: Record<string, unknown> } =>
+      typeof entry === "object" && entry !== null && "id" in entry && typeof entry.id === "string" &&
+      "infercloud" in entry && typeof entry.infercloud === "object" && entry.infercloud !== null);
+    // Older gateways expose verified models through a second profile request.
+    // Both requests share one deadline and endpoint; neither is retried.
+    if (records.length && records.every(({ infercloud }) => infercloud.profiles === undefined && infercloud.routingProfile === undefined)) {
+      url.searchParams.set("profile", "text-coding");
+      const filtered = mapModelCatalog(await loadCatalog(), options.now ?? Date.now());
+      const visible = new Set(records.map(({ id }) => id));
+      const models = filtered.models.filter(({ definition }) => visible.has(definition.id));
+      const admitted = new Set(models.map(({ definition }) => definition.id));
+      const unavailable = mapping.unavailable?.filter(({ id }) => !admitted.has(id));
+      return { models, ...(unavailable?.length ? { unavailable } : {}) };
+    }
+    return mapping;
   } catch (error) {
     if (options.signal.aborted) throw new DiscoveryError("cancelled");
     if (timeout.aborted) throw new DiscoveryError("timeout");
     if (error instanceof DiscoveryError) throw error;
+    if (error instanceof Error && error.message === "Invalid InferCloud model catalog.") throw new DiscoveryError("invalid_catalog");
     throw new DiscoveryError("network");
   }
 }

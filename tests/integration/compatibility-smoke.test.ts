@@ -3,7 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { once } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { verifiedCatalog } from "../fixtures/catalog.js";
+import { projectCatalog } from "../fixtures/catalog.js";
 import { runCompatibilitySmoke } from "../../scripts/compatibility-smoke.js";
 import { installPackedPackage } from "../fixtures/packed-package.js";
 
@@ -35,9 +35,9 @@ test(`${extension ? `InferCloud ${mode} connection in` : "configured"} stock Pi 
   let cancelledConnection = false;
   const server = createServer(async (request, response) => {
     assert.equal(request.headers.authorization, "Bearer synthetic-smoke-key");
-    if (request.url === "/v1/models?include=metadata&profile=text-coding") {
+    if (request.url === "/v1/models?include=metadata") {
       response.setHeader("Content-Type", "application/json");
-      response.end(JSON.stringify(verifiedCatalog()));
+      response.end(JSON.stringify(projectCatalog()));
       return;
     }
     if (request.url === "/v1/models") {

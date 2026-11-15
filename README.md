@@ -4,6 +4,12 @@ Use your InferCloud consumer API key with the [Pi coding agent](https://pi.dev).
 The provider discovers your project's verified coding models and delegates
 inference to Pi's OpenAI Chat Completions adapter.
 
+Discovery also explains project models that cannot yet be used for coding.
+For example, `tooling enabled (provider reported); cloud capability verification
+is missing or revoked` means configuration was discovered but the cloud has not
+verified the complete coding profile. Login can succeed while no coding model is
+selectable. Streaming support alone does not establish tool calling.
+
 ## Connect
 
 Install the package supplied by your administrator using the

@@ -2,6 +2,9 @@
 
 ## 0.1.0-rc.2 — unpublished candidate
 
+- Discover the complete project catalog with per-profile availability; explain
+  configured tooling and verification blockers without advertising unverified
+  models as coding-ready. Retain bounded legacy profile discovery.
 - Follow Pi's native provider route: `/login` with masked API-key validation,
   Pi-managed `auth.json`, `/logout`, `/model`, defaults, and `/scoped-models`.
 - Configure custom endpoints through Pi's `models.json`; provide the standard

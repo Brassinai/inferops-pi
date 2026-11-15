@@ -4,7 +4,7 @@ import test from "node:test";
 import { normalizeContext, type RefreshModelsContext } from "@earendil-works/pi-ai";
 import { createInferCloudProvider } from "../../src/provider/infercloud.js";
 import { DEFAULT_BASE_URL } from "../../src/auth/config.js";
-import { verifiedCatalog } from "../fixtures/catalog.js";
+import { projectCatalog, verifiedCatalog } from "../fixtures/catalog.js";
 
 function refreshContext(overrides: Partial<RefreshModelsContext> = {}): RefreshModelsContext {
   return { allowNetwork: true, signal: new AbortController().signal,
@@ -157,6 +157,30 @@ test("credential rotation during discovery cannot expose the prior project's cat
   finish!(Response.json(verifiedCatalog())); await pending;
   assert.deepEqual(connection.provider.getModels(), []);
   connection.dispose();
+});
+
+test("availability notices follow credential scope and the catalog freshness deadline", async () => {
+  let now = Date.now();
+  let env = environment();
+  const notices: (string | undefined)[] = [];
+  const connection = createInferCloudProvider({ env: () => env, now: () => now,
+    fetch: async () => Response.json(projectCatalog(now)), onAvailabilityChange: (notice) => notices.push(notice),
+  });
+  await connection.provider.refreshModels?.(refreshContext());
+  const old = connection.provider.getModels()[0]!;
+  assert.match(connection.getAvailabilityNotice() ?? "", /synthetic-vision/);
+  assert.equal(notices.length, 1);
+  now += 60_000;
+  assert.equal(connection.getAvailabilityNotice(), undefined);
+  await connection.provider.refreshModels?.(refreshContext());
+  env = { ...env, INFERCLOUD_API_KEY: "different-project" };
+  assert.equal(connection.getAvailabilityNotice(), undefined);
+  const rejected = await connection.provider.streamSimple(old, normalizeContext({ messages: [] }), { apiKey: "different-project" }).result();
+  assert.ok(!rejected.errorMessage?.includes("synthetic-vision"));
+  connection.dispose();
+  assert.equal(connection.getAvailabilityNotice(), undefined);
+  const afterShutdown = await connection.provider.streamSimple(old, normalizeContext({ messages: [] }), { apiKey: "synthetic-key" }).result();
+  assert.ok(!afterShutdown.errorMessage?.includes("synthetic-vision"));
 });
 
 test("Pi cache-only refresh preserves matching in-flight discovery and invalidates a rotated credential", async () => {

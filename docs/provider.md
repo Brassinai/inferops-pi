@@ -42,13 +42,17 @@ See [setup](setup.md) for the exact user flow and [Pi's native provider example]
 
 ## Discovery and limits
 
-`GET /v1/models?include=metadata&profile=text-coding` returns only project-eligible
-metadata. The mapper requires fresh routing-enforced verification, explicit text,
+`GET /v1/models?include=metadata` returns project-eligible models and per-profile
+availability. Pi consumes the verified `text-coding` subset, and displays notices
+explaining other discovered models' configured tooling and missing verification.
+The mapper requires fresh routing-enforced verification, explicit text,
 streaming and tool support, verified context/output limits, and usable token
 prices. Missing/unknown guarantees do not become defaults.
 
 Discovery rejects redirects, caps responses at 2 MiB, uses a ten-second deadline,
-and performs one request. Catalogs stay in memory, expire at the earlier of
+and performs one request on current gateways. Older gateways lacking per-profile
+metadata use one additional filtered profile lookup within the same deadline;
+there are no retries. Catalogs stay in memory, expire at the earlier of
 attestation expiry or sixty seconds, and invalidate on credential/endpoint changes.
 Failed discovery clears availability. Cancelled or superseded publications cannot
 restore stale entries. Cache-only refresh clears prior-project catalogs after

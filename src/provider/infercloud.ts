@@ -3,6 +3,7 @@ import { lazyStream, type ApiKeyCredential, type Model, type Provider, type Stre
 import { openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { consumerKey, DEFAULT_BASE_URL, gatewayBaseUrl, type Environment } from "../auth/config.js";
 import { discoverModels } from "../models/discovery.js";
+import { catalogNotice } from "../models/catalog.js";
 import { guardedStream } from "./stream.js";
 
 export const PROVIDER_ID = "infercloud";
@@ -15,6 +16,7 @@ interface CatalogEntry { model: CodingModel; expiresAt: number }
 export function createInferCloudProvider(dependencies: {
   env?: () => Environment; fetch?: typeof globalThis.fetch; now?: () => number;
   discoveryTimeoutMs?: number;
+  onAvailabilityChange?: (notice: string | undefined) => void;
   /** Initial endpoint composed by Pi before registration/cache refresh runs. */
   initialBaseUrl?: string;
 } = {}) {
@@ -30,6 +32,7 @@ export function createInferCloudProvider(dependencies: {
   let generation = 0;
   let storedCredentialKey: string | undefined;
   let pendingScope: { key: string; baseUrl: string; generation: number } | undefined;
+  let availabilityNotice: string | undefined;
 
   function currentEntries(): CatalogEntry[] {
     try {
@@ -38,6 +41,15 @@ export function createInferCloudProvider(dependencies: {
           consumerKey(env) !== scope.ambientKey || now() >= checkedAt + CATALOG_MAX_AGE_MS) return [];
       return entries.filter((entry) => entry.expiresAt > now());
     } catch { return []; }
+  }
+
+  function currentNotice(): string | undefined {
+    try {
+      const env = { ...environment() };
+      if (shutdown.signal.aborted || !scope || configuredBaseUrl !== scope.baseUrl || env.INFERCLOUD_BASE_URL !== scope.ambientUrl ||
+        consumerKey(env) !== scope.ambientKey || now() >= checkedAt + CATALOG_MAX_AGE_MS) return;
+      return availabilityNotice;
+    } catch { return; }
   }
 
   function keyFor(credential?: ApiKeyCredential): string | undefined {
@@ -67,7 +79,8 @@ export function createInferCloudProvider(dependencies: {
         });
         interaction.signal.throwIfAborted();
         if (baseUrl !== configuredBaseUrl) throw new UserFacingError("InferCloud gateway changed during login. Run /login again.");
-        if (!mapping.models.length) interaction.notify({ type: "info", message: "The key is valid, but this project currently has no verified coding models. Check project routing and model verification." });
+        const notice = catalogNotice(mapping);
+        if (notice) interaction.notify({ type: "info", message: `The key is valid. ${notice}` });
         // Pi owns persistence in auth.json. Bind the key to its validated endpoint.
         return { type: "api_key", key: apiKey, env: { INFERCLOUD_BASE_URL: baseUrl } };
       },
@@ -101,7 +114,7 @@ export function createInferCloudProvider(dependencies: {
       const signal = AbortSignal.any([context.signal, shutdown.signal]);
       const publishEmpty = async (status: string) => {
         if (signal.aborted || version !== generation) return;
-        await context.publish({ update: () => { entries = []; scope = undefined; message = status; } });
+        await context.publish({ update: () => { entries = []; scope = undefined; message = status; availabilityNotice = status; } });
       };
       try {
         signal.throwIfAborted();
@@ -141,8 +154,10 @@ export function createInferCloudProvider(dependencies: {
           entries = next;
           checkedAt = now();
           scope = { baseUrl, key, ambientKey: consumerKey(env), ambientUrl: env.INFERCLOUD_BASE_URL };
-          if (!next.length) message = "InferCloud has no verified coding models available to this project.";
+          availabilityNotice = catalogNotice(mapping);
+          message = availabilityNotice ?? "InferCloud catalog is unavailable or stale. Refresh models before sending a request.";
         } });
+        if (!signal.aborted && version === generation) dependencies.onAvailabilityChange?.(currentNotice());
       } catch (error) {
         if (signal.aborted) return;
         if (!context.allowNetwork) version = ++generation;
@@ -174,7 +189,8 @@ export function createInferCloudProvider(dependencies: {
     options?.signal?.throwIfAborted();
     const current = currentEntries().find((entry) => entry.model.id === model.id)?.model;
     if (!current || !scope || options?.apiKey !== scope.key) {
-      throw new UserFacingError(!scope || entries.length === 0 ? message : "InferCloud catalog is unavailable or stale. Refresh models before sending a request.");
+      const notice = options?.apiKey === scope?.key ? currentNotice() : undefined;
+      throw new UserFacingError(notice ?? (!scope && !shutdown.signal.aborted ? message : "InferCloud catalog is unavailable or stale. Refresh models before sending a request."));
     }
     if (model.provider !== PROVIDER_ID || model.api !== "openai-completions" || model.baseUrl !== current.baseUrl ||
         model.contextWindow > current.contextWindow || model.maxTokens > current.maxTokens) {
@@ -206,6 +222,7 @@ export function createInferCloudProvider(dependencies: {
 
   return {
     provider,
+    getAvailabilityNotice: currentNotice,
     dispose: () => { generation++; shutdown.abort(); entries = []; scope = undefined; },
   };
 }
