@@ -4,13 +4,24 @@ import { once } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { projectCatalog } from "../fixtures/catalog.js";
-import { runCompatibilitySmoke } from "../../scripts/compatibility-smoke.js";
+import { modelFailureCategory, runCompatibilitySmoke } from "../../scripts/compatibility-smoke.js";
 import { installPackedPackage } from "../fixtures/packed-package.js";
 
 interface WireMessage {
   role: string;
   tool_call_id?: string;
 }
+
+test("model failure diagnostics classify failures without returning provider content", () => {
+  for (const [message, category] of [
+    ['400 {"error":{"code":"context_length_exceeded","message":"private-canary"}}', "context limit"],
+    ["max_completion_tokens exceeds the output budget: private-canary", "output limit"],
+    ["401 private-canary", "authentication"],
+    ["429 private-canary", "rate limit"],
+    ["503 private-canary", "route unavailable"],
+    ["private-canary", "provider or transport error"],
+  ]) assert.equal(modelFailureCategory(message), category);
+});
 
 function chunk(response: ServerResponse, delta: unknown, finishReason: string | null = null) {
   response.write(`data: ${JSON.stringify({ id: "chatcmpl-fixture", object: "chat.completion.chunk",
@@ -25,8 +36,8 @@ function end(response: ServerResponse, finishReason: string) {
   response.end("data: [DONE]\n\n");
 }
 
-for (const mode of ["manual", "environment", "native", "packed"] as const) {
-const extension = mode !== "manual";
+for (const mode of ["manual", "environment", "native", "packed", "recovery"] as const) {
+const extension = mode !== "manual" && mode !== "recovery";
 test(`${extension ? `InferCloud ${mode} connection in` : "configured"} stock Pi streams text, completes the tool-result loop, and closes an aborted stream`, { timeout: 60_000 }, async (t) => {
   const packed = mode === "packed" ? await installPackedPackage() : undefined;
   if (packed) t.after(packed.cleanup);
@@ -53,6 +64,7 @@ test(`${extension ? `InferCloud ${mode} connection in` : "configured"} stock Pi 
       stream_options: { include_usage: boolean } };
     assert.equal(payload.model, "synthetic-coder");
     assert.equal(payload.stream, true);
+    assert.equal((payload as unknown as { temperature: number }).temperature, 0);
     assert.equal(payload.stream_options.include_usage, true);
     if (extension) {
       assert.equal(request.headers["x-infercloud-routing-profile"], "text-coding");
@@ -77,6 +89,7 @@ test(`${extension ? `InferCloud ${mode} connection in` : "configured"} stock Pi 
       toolResultsReplayed = Math.max(toolResultsReplayed, results.length);
       assert.ok(results.every((message) => typeof message.tool_call_id === "string"));
       const calls = [
+        ...(mode === "recovery" ? [{ name: "read", args: { path: "missing.mjs" } }] : []),
         { name: "read", args: { path: "greeting.mjs" } },
         { name: "edit", args: { path: "greeting.mjs", oldText: "Hello, ", newText: "Hi, " } },
         { name: "bash", args: { command: "node verify.mjs" } },
@@ -85,7 +98,7 @@ test(`${extension ? `InferCloud ${mode} connection in` : "configured"} stock Pi 
       if (call) {
         const args = JSON.stringify(call.args);
         const split = Math.floor(args.length / 2);
-        chunk(response, { tool_calls: [{ index: 0, id: `call_smoke_${call.name}`, type: "function",
+        chunk(response, { tool_calls: [{ index: 0, id: `call_smoke_${call.name}_${results.length}`, type: "function",
           function: { name: call.name, arguments: args.slice(0, split) } }] });
         chunk(response, { tool_calls: [{ index: 0, function: { arguments: args.slice(split) } }] });
         end(response, "tool_calls");
@@ -108,15 +121,17 @@ test(`${extension ? `InferCloud ${mode} connection in` : "configured"} stock Pi 
     nativeLogin: mode === "native" || mode === "packed",
   });
   assert.equal(report.piVersion, "1.5.2");
-  assert.equal(report.phases.flatMap((phase) => phase.requests).length, 6);
+  const requestCount = mode === "recovery" ? 7 : 6;
+  assert.equal(report.phases.flatMap((phase) => phase.requests).length, requestCount);
   assert.ok(report.phases.flatMap((phase) => phase.requests).every((record) => record.requestId));
-  assert.equal(inferenceRequests, 6);
-  assert.equal(toolResultsReplayed, 3);
+  assert.equal(inferenceRequests, requestCount);
+  assert.equal(toolResultsReplayed, mode === "recovery" ? 4 : 3);
   assert.equal(cancelledConnection, true);
   assert.deepEqual(report.phases.map((phase) => phase.phase), ["text", "tools", "cancellation"]);
   assert.deepEqual(report.phases[1]?.tools, { read: 1, edit: 1, bash: 1 });
-  assert.equal(report.phases[1]?.inputTokens, 160);
-  assert.equal(report.phases[1]?.outputTokens, 40);
+  assert.equal(report.phases[1]?.toolErrors, mode === "recovery" ? 1 : 0);
+  assert.equal(report.phases[1]?.inputTokens, mode === "recovery" ? 200 : 160);
+  assert.equal(report.phases[1]?.outputTokens, mode === "recovery" ? 50 : 40);
   assert.equal(report.phases[2]?.aborted, true);
   assert.ok(report.gatewayUsageReconciliation.startsWith("pending:"));
   assert.ok(!JSON.stringify(report).includes("synthetic-smoke-key"));

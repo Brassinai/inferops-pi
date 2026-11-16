@@ -36,6 +36,8 @@ interface PhaseResult {
   phase: "text" | "tools" | "cancellation";
   textDeltas: number;
   tools: Record<string, number>;
+  toolErrors: number;
+  toolErrorCategories: string[];
   inputTokens: number;
   outputTokens: number;
   aborted: boolean;
@@ -49,12 +51,36 @@ interface PiRecord {
   aborted?: boolean;
   isError?: boolean;
   toolName?: string;
+  result?: { content?: { type: string; text?: string }[] };
   assistantMessageEvent?: { type?: string; delta?: string };
   message?: {
     role?: string;
     stopReason?: string;
+    errorMessage?: string;
     usage?: { input?: number; output?: number };
   };
+}
+
+/** Report fixed diagnostic categories without echoing provider error payloads. */
+export function modelFailureCategory(message: string | undefined): string {
+  const text = (message ?? "").toLowerCase();
+  if (/context|too many tokens/.test(text)) return "context limit";
+  if (/max_tokens|max_completion_tokens|output.*(?:limit|budget)/.test(text)) return "output limit";
+  if (/401|403|api key|authorization/.test(text)) return "authentication";
+  if (/429|rate.limit/.test(text)) return "rate limit";
+  if (/402|balance|billing/.test(text)) return "billing";
+  if (/503|no_compatible_offering|provider_unavailable/.test(text)) return "route unavailable";
+  if (/400|422|invalid_request/.test(text)) return "request rejected";
+  return "provider or transport error";
+}
+
+function toolFailureCategory(event: PiRecord): string {
+  const text = (event.result?.content ?? []).map((part) => part.text ?? "").join(" ").toLowerCase();
+  const tool = ["read", "edit", "bash"].includes(event.toolName ?? "") ? event.toolName : "unknown";
+  const category = /enoent|no such file|file not found/.test(text) ? "missing file" :
+    /command not found/.test(text) ? "missing executable" : /oldtext|exact text/.test(text) ? "edit target" :
+    /required|invalid.*argument|invalid_type/.test(text) ? "invalid arguments" : "execution error";
+  return `${tool}: ${category}`;
 }
 
 const piDirectory = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
@@ -93,10 +119,14 @@ async function runPhase(
   options: SmokeOptions, agentDir: string, cwd: string,
   phase: PhaseResult["phase"],
 ): Promise<PhaseResult> {
+  const source = join(cwd, "greeting.mjs");
+  const verifier = join(cwd, "verify.mjs");
+  const verifierCommand = "node '" + verifier.replaceAll("'", "'\\''") + "'";
   const prompts = {
     text: "Reply with a short greeting. Do not use tools.",
-    tools: "Use read to inspect greeting.mjs. Use edit to replace the literal Hello, with Hi, in that file. " +
-      "Use bash to run node verify.mjs. Then explain the command result briefly. Do not modify verify.mjs or other files.",
+    tools: `Use read to inspect ${source}. Use edit to replace the literal Hello, with Hi, in that file. ` +
+      `Use bash to run ${verifierCommand}. Then explain the command result briefly. ` +
+      `Use these exact file paths. Do not modify ${verifier} or other files.`,
     cancellation: "Count from 1 to 10000, one number per line. Keep generating until you reach 10000. Do not use tools.",
   };
   const auditFile = join(agentDir, phase + "-usage.jsonl");
@@ -117,9 +147,10 @@ async function runPhase(
     stdio: ["pipe", "pipe", "pipe"],
   });
   const closed = new Promise<void>((done) => child.once("close", () => done()));
-  const result: PhaseResult = { phase, textDeltas: 0, tools: {}, inputTokens: 0, outputTokens: 0, aborted: false, requests: [] };
+  const result: PhaseResult = { phase, textDeltas: 0, tools: {}, toolErrors: 0, toolErrorCategories: [], inputTokens: 0, outputTokens: 0, aborted: false, requests: [] };
   let sentAbort = false;
   let assistantFinished = false;
+  let verifierPassed = false;
   child.stdout.setEncoding("utf8");
   // Consume diagnostics without reflecting provider payloads or credentials.
   child.stderr.resume();
@@ -131,7 +162,10 @@ async function runPhase(
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        if (error) fail(error);
+        if (error) {
+          const summary = `Successful tools: read=${result.tools.read ?? 0}, edit=${result.tools.edit ?? 0}, bash=${result.tools.bash ?? 0}; tool errors=${result.toolErrors}`;
+          fail(new Error(`${error.message} ${summary}${result.toolErrorCategories.length ? ` (${result.toolErrorCategories.join("; ")})` : ""}.`));
+        }
         else done();
       };
       child.once("error", () => finish(new Error("Pi could not be started.")));
@@ -167,12 +201,19 @@ async function runPhase(
             }
           }
           if (event.type === "tool_execution_end") {
-            if (event.isError) { finish(new Error("Pi reported a failed tool execution.")); return; }
-            if (event.toolName) result.tools[event.toolName] = (result.tools[event.toolName] ?? 0) + 1;
+            if (event.isError) {
+              result.toolErrors++;
+              const category = toolFailureCategory(event);
+              if (!result.toolErrorCategories.includes(category)) result.toolErrorCategories.push(category);
+              if (result.toolErrors >= 4) { finish(new Error("Pi could not recover from tool execution errors.")); return; }
+            } else if (event.toolName) {
+              result.tools[event.toolName] = (result.tools[event.toolName] ?? 0) + 1;
+              if (event.toolName === "bash" && event.result?.content?.some((part) => part.type === "text" && part.text?.includes("PI_SMOKE_TOOL_OK"))) verifierPassed = true;
+            }
           }
           if (event.type === "message_end" && event.message?.role === "assistant") {
             if (event.message.stopReason === "error") {
-              finish(new Error(`The model failed during the ${phase} check.`)); return;
+              finish(new Error(`Pi ${phase} request failed (${modelFailureCategory(event.message.errorMessage)}).`)); return;
             }
             assistantFinished = event.message.stopReason === "stop";
             const usage = event.message.usage;
@@ -205,8 +246,11 @@ async function runPhase(
   if (phase !== "cancellation" && (result.inputTokens === 0 || result.outputTokens === 0)) {
     throw new Error(`Pi received no input/output token accounting during the ${phase} check.`);
   }
-  if (phase === "tools" && ["read", "edit", "bash"].some((name) => !result.tools[name])) {
-    throw new Error("Pi did not complete all required read, edit, and bash tools.");
+  if (phase === "tools" && (!verifierPassed || ["read", "edit", "bash"].some((name) => !result.tools[name]))) {
+    throw new Error(`Pi did not complete all required read, edit, and bash tools. ` +
+      `Successful tools: read=${result.tools.read ?? 0}, edit=${result.tools.edit ?? 0}, bash=${result.tools.bash ?? 0}; ` +
+      `verifier passed=${verifierPassed}; tool errors=${result.toolErrors}` +
+      `${result.toolErrorCategories.length ? ` (${result.toolErrorCategories.join("; ")})` : ""}.`);
   }
   try {
     const records = await readFile(auditFile, "utf8");
@@ -242,10 +286,14 @@ export async function runCompatibilitySmoke(options: SmokeOptions) {
     if (!options.extensionPath && !options.packagePath) await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { infercloud: {
       baseUrl: baseUrl.toString().replace(/\/$/, ""), api: "openai-completions",
       apiKey: "$INFERCLOUD_API_KEY", models: [{ id: options.model, input: ["text"],
-        reasoning: false, contextWindow: options.contextWindow, maxTokens: options.maxOutputTokens }],
+        reasoning: false, contextWindow: options.contextWindow, maxTokens: options.maxOutputTokens,
+        samplingParams: { temperature: 0 } }],
     } } }));
     if (options.extensionPath || options.packagePath) {
-      await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { infercloud: { baseUrl: options.baseUrl } } }));
+      await writeFile(join(agentDir, "models.json"), JSON.stringify({ providers: { infercloud: {
+        baseUrl: options.baseUrl,
+        modelOverrides: { [options.model]: { samplingParams: { temperature: 0 } } },
+      } } }));
     }
     if (options.nativeLogin) {
       const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), refreshOnCreate: false });
@@ -305,11 +353,12 @@ async function main() {
     model: process.env.INFERCLOUD_PI_MODEL ?? "",
     contextWindow: Number(process.env.INFERCLOUD_PI_CONTEXT_WINDOW),
     maxOutputTokens: Number(process.env.INFERCLOUD_PI_MAX_OUTPUT_TOKENS),
+    ...(process.env.INFERCLOUD_PI_TIMEOUT_MS ? { timeoutMs: Number(process.env.INFERCLOUD_PI_TIMEOUT_MS) } : {}),
   });
-  const reportDir = resolve(".tmp/compatibility");
+  const reportPath = process.env.INFERCLOUD_PI_REPORT_PATH ? resolve(process.env.INFERCLOUD_PI_REPORT_PATH) : resolve(".tmp/compatibility", `${Date.now()}.json`);
+  const reportDir = dirname(reportPath);
   await mkdir(reportDir, { recursive: true });
-  const reportPath = join(reportDir, `${Date.now()}.json`);
-  await writeFile(reportPath, JSON.stringify(report, null, 2) + "\n");
+  await writeFile(reportPath, JSON.stringify(report, null, 2) + "\n", { flag: "wx", mode: 0o600 });
   process.stdout.write(`Pi compatibility checks passed. Secret-free report: ${reportPath}\n`);
   process.stdout.write("Gateway usage reconciliation and upstream cancellation still require verification.\n");
 }

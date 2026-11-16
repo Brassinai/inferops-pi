@@ -9,13 +9,13 @@ Neither uses a live model or incurs inference charges.
 
 | Check | Automated evidence | Live InferCloud evidence |
 | --- | --- | --- |
-| Bearer key and authorized model discovery | Synthetic endpoint | Pending |
-| OpenAI Chat Completions text streaming | Stock Pi with synthetic SSE | Pending |
+| Bearer key and authorized model discovery | Synthetic endpoint | Local deployment checked, 2026-11-16 |
+| OpenAI Chat Completions text streaming | Stock Pi with synthetic SSE | Provider and cloud streaming tool/result probes passed |
 | Fragmented tool-call arguments | Stock Pi with synthetic SSE | Pending |
 | Interleaved calls and split UTF-8 bytes | Built-in Pi adapter with synthetic SSE | Pending |
-| Read, edit, bash, and replayed tool results | Real Pi tools in disposable files | Pending |
-| Streamed input/output and cached tokens | Synthetic counters; real gateway/PostgreSQL reconciliation | Pending |
-| Abort after the first text delta | Pi abort and closed HTTP stream | Pending gateway/provider verification |
+| Read, edit, bash, and replayed tool results | Real Pi tools in disposable files | Current 0.8B model failed the complete task; protocol probes passed |
+| Streamed input/output and cached tokens | Synthetic counters; real gateway/PostgreSQL reconciliation | Two successful Pi requests reconciled to gateway token records; live cache hits not separately exercised |
+| Abort after the first text delta | Pi abort and closed HTTP stream | Pi abort, gateway terminal usage and capacity release checked; upstream cancellation timing not separately measured |
 
 The InferCloud gateway also has a focused Go test covering forwarded tools,
 tool-result history, streamed tool-call bytes, usage inclusion, and finalized
@@ -23,9 +23,27 @@ token counts. It uses a synthetic authenticated store and provider response.
 The database check covers durable synthetic accounting as described below. These
 suites do not establish real model/runtime compatibility or hosted billing.
 
-The initial environment inspection found the local gateway stopped and the
-configured OrbStack Kubernetes API refusing connections. A live result still
-requires the intended environment to be available.
+The local Qwen3.5 0.8B deployment was checked with a 16,384-token context window
+and 256-token output budget. Its streamed structured calls and fresh tool-result
+nonce passed on provider and consumer routes. Normal Pi discovery advertised
+those verified limits. This establishes API compatibility for that deployment;
+the model's failure on the full file-editing fixture remains a coding-quality
+limitation. Other rows marked pending require their own live evidence.
+The normal installed extension also completed a real read/tool-result loop and
+an RPC cancellation. Three admission failures recovered through Pi's native
+retry policy and carried zero gateway charges. The two successful requests and
+one cancellation were reconciled by exact gateway request IDs.
+
+A later check used the installed extension with normal system context, skill
+and resource discovery, and default tool definitions. The greeting completed
+with one successful request (7,317 input tokens and 24 output tokens), no model
+errors, and no tool actions; the cold CPU run took approximately 85 seconds.
+The 8,192-token deployment had rejected Pi's larger request estimate. Its real
+context was increased to 16,384, checked with 15,917 prompt tokens and an
+oversized-input rejection, and attested again. The gateway now distinguishes
+context overflow from transient unavailability and uses a verified-context
+capacity burst while retaining configured quotas and measured sustained refill.
+
 
 ## Default verification
 
@@ -66,6 +84,17 @@ gateways use HTTPS. Embedded credentials, query parameters, and URL fragments
 are rejected. Configure the inference gateway rather than the management API.
 
 ## Run the live check
+
+The coding phase allows bounded recovery from tool errors, as Pi's agent loop
+normally does. Success still requires successful read, edit, and bash tools,
+the expected file edit, an unchanged verifier, and the verifier's passing output.
+Reports count recovered tool errors without storing their raw contents.
+Checks set temperature to zero through Pi's native model configuration, on both
+provider and consumer paths. They establish protocol compatibility at that
+setting; they do not certify coding quality across tasks or sampling settings.
+`INFERCLOUD_PI_TIMEOUT_MS` adjusts each phase's deadline for slower CPU runtimes.
+`INFERCLOUD_PI_REPORT_PATH` selects a private output file; an existing file is
+never overwritten. These are operator test settings, not model capability claims.
 
 After exporting the required configuration:
 
