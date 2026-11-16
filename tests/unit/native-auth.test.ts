@@ -150,6 +150,7 @@ test("Pi models.json API-key configuration remains available and native login ta
   t.after(() => connection.dispose());
   const runtime = await ModelRuntime.create({ authPath: join(directory, "auth.json"), modelsPath, refreshOnCreate: false });
   runtime.registerNativeProvider(connection.provider);
+  await runtime.refresh({ providers: ["infercloud"], allowNetwork: false });
   await runtime.refresh({ providers: ["infercloud"] });
   assert.equal(authorization, "Bearer synthetic-configured-key");
   assert.equal((await runtime.getAvailable("infercloud")).length, 1);

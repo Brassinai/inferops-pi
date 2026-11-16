@@ -8,7 +8,9 @@ import { guardedStream } from "./stream.js";
 
 export const PROVIDER_ID = "infercloud";
 const CATALOG_MAX_AGE_MS = 60_000;
-const INFERENCE_TIMEOUT_MS = 120_000;
+// A valid large context on a small CPU runtime can take several minutes to
+// prefill. Keep a bounded overall deadline; native timeoutMs still overrides it.
+const INFERENCE_TIMEOUT_MS = 10 * 60_000;
 
 type CodingModel = Model<"openai-completions">;
 interface CatalogEntry { model: CodingModel; expiresAt: number }
@@ -199,7 +201,13 @@ export function createInferCloudProvider(dependencies: {
     if (options?.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens <= 0 || options.maxTokens > current.maxTokens)) {
       throw new Error("InferCloud output budget exceeds the verified model limit.");
     }
-    return structuredClone(current);
+    return {
+      ...structuredClone(current),
+      // Pi composes user sampling settings through models.json. Preserve these
+      // without accepting overrides of the endpoint or verified capabilities.
+      ...(model.samplingParams ? { samplingParams: structuredClone(model.samplingParams) } : {}),
+      ...(model.samplingParamsByThinkingLevel ? { samplingParamsByThinkingLevel: structuredClone(model.samplingParamsByThinkingLevel) } : {}),
+    };
   }
 
   function requestOptions<T extends StreamOptions>(model: CodingModel, options: T | undefined) {

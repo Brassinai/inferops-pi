@@ -26,7 +26,7 @@ function safe(message: AssistantMessage) {
   assert.equal(message.diagnostics, undefined);
 }
 
-test("gateway failures have actionable messages without private payloads or automatic retries", async () => {
+test("gateway failures have safe messages and leave admission retries to Pi", async () => {
   for (const item of [
     { status: 401, code: "invalid_api_key", pattern: /invalid or revoked/ },
     { status: 403, code: "forbidden", pattern: /project access/ },
@@ -44,7 +44,8 @@ test("gateway failures have actionable messages without private payloads or auto
   ]) {
     const { result, requests } = await infer(() => Response.json({ error: { code: item.code, message: "private-canary", metadata: { raw: "private-canary" } } }, { status: item.status }));
     assert.equal(result.stopReason, "error"); assert.match(result.errorMessage ?? "", item.pattern);
-    safe(result); assert.equal(requests, 1); assert.equal(isRetryableAssistantError(result), false);
+    safe(result); assert.equal(requests, 1);
+    assert.equal(isRetryableAssistantError(result), item.status === 503 && ["no_compatible_offering", "provider_unavailable"].includes(item.code));
     assert.equal(isContextOverflow(result, 8192), false);
   }
 });

@@ -48,6 +48,11 @@ catalog into this file. Models added manually cannot bypass fresh verification,
 profile limits, or project access. Pi composes user overrides above the provider,
 and the extension rejects unverified IDs, endpoint mismatches, and inflated limits.
 
+Pi's native `modelOverrides` can set sampling parameters for individual models,
+for example `"modelOverrides": { "your-model-id": { "samplingParams": {
+"temperature": 0 } } }` inside the `infercloud` provider. These settings reach
+inference without changing the verified endpoint, capabilities, or limits.
+
 For automation, `INFERCLOUD_BASE_URL` supplies an endpoint when `models.json` has
 no override. A native-login credential carries its validated endpoint in Pi's
 provider-scoped credential environment. Changing the endpoint requires `/login`
@@ -106,9 +111,18 @@ configuration, without submitting keys in chat messages or command arguments.
 | Partial or interrupted inference | Review partial output before starting again; the adapter does not replay it. |
 | Invalid Pi credential file | Follow Pi's credential-storage guidance, then use `/login`. |
 
-Inference deadlines apply to established streams too. Only explicit canonical
+An HTTP 503 with `no_compatible_offering` or `provider_unavailable` retains its
+status in the safe error message so Pi's native bounded retry policy can wait
+for capacity or provider recovery. This applies before any streamed content has
+arrived. The adapter does not retry requests itself; partial streams and other
+failures still require user action.
+
+Inference has a ten-minute overall deadline, including established streams, so
+verified large contexts on CPU runtimes can finish prefilling. Pi's native
+`timeoutMs` option can shorten or replace that deadline; cancellation remains
+immediate. Only explicit canonical
 pre-stream overflow enables Pi's context recovery. Provider-level retries are
-disabled, and fixed terminal messages avoid partial-stream replay. Diagnostics
+disabled, and fixed partial-stream messages avoid replay. Diagnostics
 do not include provider bodies, credentials, or raw transport errors. Gateway
 usage and charges remain authoritative, including failed or cancelled requests.
 

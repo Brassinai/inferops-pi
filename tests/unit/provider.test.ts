@@ -126,6 +126,25 @@ test("streaming preserves profile headers and budgets and makes no automatic ret
   connection.dispose();
 });
 
+test("native model sampling overrides reach inference without changing verified limits", async () => {
+  let calls = 0;
+  const connection = createInferCloudProvider({ env: environment, fetch: async (url, init) => {
+    if (String(url).includes("/models?")) return Response.json(verifiedCatalog());
+    calls++;
+    const payload = JSON.parse(String(init?.body));
+    assert.equal(payload.temperature, 0);
+    assert.equal(payload.top_p, 0.8);
+    assert.equal(payload.max_tokens ?? payload.max_completion_tokens, 512);
+    assert.equal(new Headers(init?.headers).get("X-InferCloud-Min-Context-Tokens"), "8192");
+    return Response.json({ error: { code: "provider_unavailable" } }, { status: 503 });
+  } });
+  await connection.provider.refreshModels?.(refreshContext());
+  const model = { ...connection.provider.getModels()[0]!, samplingParams: { temperature: 0.6, top_p: 0.8 }, samplingParamsByThinkingLevel: { off: { temperature: 0 } } };
+  await connection.provider.streamSimple(model, normalizeContext({ messages: [] }), { apiKey: "synthetic-key" }).result();
+  assert.equal(calls, 1);
+  connection.dispose();
+});
+
 test("cancelled refresh cannot install its response, and disposing aborts discovery", async () => {
   let finish: ((response: Response) => void) | undefined;
   let fetchSignal: AbortSignal | null | undefined;

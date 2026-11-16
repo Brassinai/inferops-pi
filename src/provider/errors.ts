@@ -1,7 +1,7 @@
 export interface GatewayFailure { code: string; message: string }
 const fixed = (code: string, message: string): GatewayFailure => ({ code, message });
 
-/** Interpret codes, never gateway/provider prose. Messages deliberately require a new user action. */
+/** Interpret codes, never gateway/provider prose. Preserve safe admission failures for Pi's retry policy. */
 export function gatewayFailure(status: number, code?: string): GatewayFailure {
   if (status === 401) return fixed("authentication", "InferCloud rejected the consumer key. It may be invalid or revoked; reconnect with /login.");
   if (status === 403) return fixed("forbidden", "InferCloud denied this project access. Ask the project owner to check permissions.");
@@ -14,11 +14,19 @@ export function gatewayFailure(status: number, code?: string): GatewayFailure {
   if (status === 400 && code === "context_length_exceeded") {
     return fixed("context_length_exceeded", "context_length_exceeded: The conversation does not fit the model's context window. Compact it or start a smaller session.");
   }
+  if (status === 503 && code === "no_compatible_offering") {
+    // The gateway rejected admission without forwarding inference. Retain the
+    // HTTP status so Pi can apply its own bounded, cancellable retry policy.
+    return fixed("availability", "InferCloud has no eligible verified route (HTTP 503). Wait for capacity or refresh models if this persists.");
+  }
   if (["no_compatible_offering", "capability_verification_unavailable", "mesh_route_denied", "routing_not_configured"].includes(code ?? "")) {
     return fixed("availability", "InferCloud has no eligible verified route for this request. Refresh models or ask the project owner to check routing.");
   }
   if (code === "provider_timeout") return fixed("deadline", "InferCloud did not finish within the request deadline. Start a new request when ready.");
   if (code === "provider_auth_failed") return fixed("provider_authentication", "The model deployment rejected InferCloud gateway authorization. Ask the project owner to contact support.");
+  if (status === 503 && code === "provider_unavailable") {
+    return fixed("availability", "InferCloud could not serve this request (HTTP 503). Wait for the provider to recover or refresh models if this persists.");
+  }
   if (status >= 500) return fixed("availability", "InferCloud could not serve this request. Refresh models or start a new request later.");
   return fixed("rejected", "InferCloud rejected this request. Check the selected model, text-only input, and output budget.");
 }
