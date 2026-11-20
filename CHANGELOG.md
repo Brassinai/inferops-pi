@@ -2,6 +2,9 @@
 
 ## 0.1.0-rc.2 — unpublished candidate
 
+- Accept saved deployment-bound Cloud verification without daily expiry, while
+  retaining legacy expiry handling for older gateways and current routing checks.
+
 - Discover the complete project catalog with per-profile availability; explain
   configured tooling and verification blockers without advertising unverified
   models as coding-ready. Retain bounded legacy profile discovery.

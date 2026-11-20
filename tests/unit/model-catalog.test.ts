@@ -95,6 +95,38 @@ test("project discovery distinguishes configured tooling from verified coding av
   assert.match(catalogNotice(mapped) ?? "", /synthetic-vision: tooling enabled \(provider reported\)/);
 });
 
+test("deployment-bound verification needs no expiry and still requires capabilities and limits", () => {
+  const payload = catalog();
+  const metadata = payload.data[0]!.infercloud as Record<string, unknown>;
+  metadata.verificationValidity = "DeploymentBound";
+  delete metadata.verificationExpiresAt;
+  const mapped = mapModelCatalog(payload, Date.parse("2036-01-01T00:00:00Z"));
+  assert.equal(mapped.models.length, 1);
+  assert.equal(mapped.models[0]!.verificationExpiresAt, undefined);
+  // Historical timestamps cannot expire an explicit deployment-bound record.
+  metadata.verificationExpiresAt = "2000-01-01T00:00:00Z";
+  assert.equal(mapModelCatalog(payload).models.length, 1);
+  payload.data[0]!.infercloud.capabilities.toolCalling = "Unknown";
+  assert.equal(mapModelCatalog(payload).models.length, 0);
+  payload.data[0]!.infercloud.capabilities.toolCalling = "Supported";
+  payload.data[0]!.infercloud.limits.contextWindow.verification = "ProviderReported";
+  assert.equal(mapModelCatalog(payload).models.length, 0);
+});
+
+test("verification validity must be explicit and availability remains authoritative", () => {
+  const payload = projectCatalog();
+  const profile = payload.data[0]!.infercloud.profiles["text-coding"] as Record<string, unknown>;
+  delete profile.verificationExpiresAt;
+  assert.equal(mapModelCatalog(payload).models.length, 0);
+  profile.verificationValidity = "unknown-policy";
+  assert.equal(mapModelCatalog(payload).models.length, 0);
+  profile.verificationValidity = "DeploymentBound";
+  assert.equal(mapModelCatalog(payload).models.length, 1);
+  profile.available = false;
+  profile.reasons = ["capability_verification_missing_or_revoked"];
+  assert.equal(mapModelCatalog(payload).models.length, 0);
+});
+
 test("availability notices whitelist reason codes and bound model identifiers", () => {
   const payload = projectCatalog();
   payload.data[1]!.infercloud.profiles["text-coding"].reasons = ["private-body-canary"];

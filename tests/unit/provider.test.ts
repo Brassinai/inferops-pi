@@ -65,6 +65,27 @@ test("expired attestations, aged discovery, changed credentials, and shutdown in
   assert.deepEqual(connection.provider.getModels(), []);
 });
 
+test("deployment-bound models survive elapsed time and reconnect without weakening catalog freshness", async () => {
+  let now = Date.now();
+  const payload = verifiedCatalog(now);
+  const metadata = payload.data[0]!.infercloud as Record<string, unknown>;
+  metadata.verificationValidity = "DeploymentBound";
+  delete metadata.verificationExpiresAt;
+  const options = { env: environment, now: () => now, fetch: async () => Response.json(payload) };
+  const first = createInferCloudProvider(options);
+  await first.provider.refreshModels?.(refreshContext());
+  assert.equal(first.provider.getModels().length, 1);
+  now += 30 * 24 * 3600_000;
+  assert.deepEqual(first.provider.getModels(), []); // Route/catalog freshness still applies.
+  await first.provider.refreshModels?.(refreshContext());
+  assert.equal(first.provider.getModels().length, 1);
+  first.dispose();
+  const reconnected = createInferCloudProvider(options);
+  await reconnected.provider.refreshModels?.(refreshContext());
+  assert.equal(reconnected.provider.getModels().length, 1);
+  reconnected.dispose();
+});
+
 test("Pi publication generation prevents superseded refreshes from resurrecting models", async () => {
   let finishFirst: ((response: Response) => void) | undefined;
   let calls = 0;

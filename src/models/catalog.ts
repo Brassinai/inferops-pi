@@ -4,7 +4,7 @@ type PiChatModel = Extract<ProviderModelConfig, { type?: "chat" }>;
 export interface CatalogMapping {
   models: {
     definition: PiChatModel;
-    verificationExpiresAt: string;
+    verificationExpiresAt?: string;
   }[];
   unavailable?: { id: string; tooling: "Enabled" | "Disabled" | "Mixed" | "Unknown"; reason: string }[];
 }
@@ -17,15 +17,26 @@ function codingMetadata(value: unknown): Record<string, unknown> | undefined {
   if (!record(profile) || profile.available !== true) return;
   return { schemaVersion: value.schemaVersion, scope: value.scope, generatedAt: value.generatedAt,
     routingProfile: "text-coding", routingEnforced: true, verificationExpiresAt: profile.verificationExpiresAt,
+    verificationValidity: profile.verificationValidity,
     capabilities: profile.capabilities, limits: profile.limits, pricing: profile.pricing };
 }
 
 const availabilityReasons: Record<string, string> = {
   capability_verification_missing_or_revoked: "cloud capability verification is missing or revoked",
   capability_verification_expired: "cloud capability verification has expired",
-  capability_deployment_changed: "the deployment changed and needs verification",
+  capability_verification_invalid: "the stored capability verification is invalid",
+  capability_deployment_changed: "the deployment no longer matches its saved verification",
   text_coding_not_verified: "streaming chat and tool calling have not all been verified",
 };
+
+// Current Cloud records are deployment-bound. Keep support for older gateways
+// that explicitly advertise an expiring attestation; missing policy is not proof.
+function validVerification(metadata: Record<string, unknown>, now: number): boolean {
+  if (metadata.verificationValidity === "DeploymentBound") return true;
+  if (metadata.verificationValidity !== undefined) return false;
+  return typeof metadata.verificationExpiresAt === "string" &&
+    Number.isFinite(Date.parse(metadata.verificationExpiresAt)) && Date.parse(metadata.verificationExpiresAt) > now;
+}
 
 function unavailableReason(metadata: unknown, now: number): string {
   if (!record(metadata)) return "capability metadata is unavailable";
@@ -37,8 +48,7 @@ function unavailableReason(metadata: unknown, now: number): string {
   }
   const coding = codingMetadata(metadata);
   if (!coding) return "verified coding availability is not advertised";
-  if (typeof coding.verificationExpiresAt !== "string" || !Number.isFinite(Date.parse(coding.verificationExpiresAt)) ||
-    Date.parse(coding.verificationExpiresAt) <= now) return "cloud capability verification is missing or expired";
+  if (!validVerification(coding, now)) return "cloud capability verification is missing or expired";
   if (record(coding.capabilities) && coding.capabilities.toolCalling === "Unsupported") return "tool calling is unsupported";
   if (record(coding.capabilities) && coding.capabilities.toolCalling !== "Supported") return "tool calling has not been verified";
   if (!record(coding.limits) || verifiedTokens(coding.limits.contextWindow) === undefined || verifiedTokens(coding.limits.maxOutput) === undefined) {
@@ -107,8 +117,7 @@ export function mapModelCatalog(payload: unknown, now = Date.now()): CatalogMapp
       continue;
     }
     if (metadata.routingProfile !== "text-coding" || !metadata.routingEnforced) { continue; }
-    if (typeof metadata.verificationExpiresAt !== "string" ||
-        !Number.isFinite(Date.parse(metadata.verificationExpiresAt)) || Date.parse(metadata.verificationExpiresAt) <= now) {
+    if (!validVerification(metadata, now)) {
       continue;
     }
     const capabilities = metadata.capabilities;
@@ -150,7 +159,8 @@ export function mapModelCatalog(payload: unknown, now = Date.now()): CatalogMapp
         },
         cost: { input: input.maximum, output: output.maximum, cacheRead: cacheRead.maximum, cacheWrite: cacheWrite.maximum },
       },
-      verificationExpiresAt: metadata.verificationExpiresAt,
+      ...(metadata.verificationValidity !== "DeploymentBound" && typeof metadata.verificationExpiresAt === "string" ?
+        { verificationExpiresAt: metadata.verificationExpiresAt } : {}),
     });
   }
   const admitted = new Set(result.models.map(({ definition }) => definition.id));

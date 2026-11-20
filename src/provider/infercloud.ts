@@ -150,7 +150,7 @@ export function createInferCloudProvider(dependencies: {
             reasoning: false, input: ["text"], cost: definition.cost, contextWindow: definition.contextWindow,
             maxTokens: definition.maxTokens, ...(definition.headers ? { headers: definition.headers } : {}),
           },
-          expiresAt: Date.parse(verificationExpiresAt),
+          expiresAt: verificationExpiresAt === undefined ? Infinity : Date.parse(verificationExpiresAt),
         }));
         await context.publish({ update: () => {
           entries = next;

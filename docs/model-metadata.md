@@ -16,7 +16,12 @@ The mapper admits a model only when all of the following hold:
 
 - Metadata schema version is `1` and scope is `ProjectEligibleOfferings`.
 - `routingEnforced` is `true` and `routingProfile` is `text-coding`.
-- `verificationExpiresAt` is valid and still in the future.
+- `verificationValidity` is `DeploymentBound`. The latest saved verification is
+  usable while it is not revoked and the current deployment binding matches.
+  If a changed binding later matches again, Cloud can reuse the saved record;
+  operators should revoke it if the original evidence is no longer trustworthy.
+  For compatibility with older gateways, an absent validity policy is accepted
+  only when `verificationExpiresAt` is valid and still in the future.
 - Chat completions, streaming, tool calling, and text input are `Supported`.
 - Context and output limits are positive safe integers labelled `Verified`.
 - Output limits fit within the context window.
@@ -30,7 +35,7 @@ envelopes produce a fixed error without reflecting their body.
 Unprofiled InferCloud discovery retains top-level `routingEnforced: false`,
 `Unknown` capabilities, and `ProviderReported` or `Unknown` limits. Its additive
 `profiles["text-coding"]` entry supplies availability, reason codes, verified limits,
-capabilities, expiry and prices for the compatible route subset. The mapper uses
+capabilities, validity and prices for the compatible route subset. The mapper uses
 that subset's metadata only when `available` is true; it never substitutes the
 general catalog's limits or prices. Legacy filtered profile responses remain
 supported through a bounded fallback lookup.
@@ -41,7 +46,7 @@ produce bounded availability notices at login, startup and changed refreshes.
 Only recognized reason codes are rendered; raw error prose is not displayed.
 These models remain unselectable for coding until all required guarantees pass.
 
-Profile discovery requires a fresh platform-admin attestation bound to
+Profile discovery requires a saved platform-admin attestation bound to
 the approved deployment and mesh identity. Real operators must run compatibility
 and limit checks and retain evidence before attesting. Synthetic test records do
 not qualify as verification of a real model/runtime.
@@ -54,9 +59,11 @@ also carries `X-InferCloud-Routing-Profile: text-coding`,
 `X-InferCloud-Min-Context-Tokens`, and `X-InferCloud-Min-Output-Tokens` headers
 using those discovered limits. The gateway checks the requirements for primary
 and fallback routes and rechecks fresh evidence before usage reservation. Tool
-history also selects the profile automatically. Expired, revoked, changed, or
+history also selects the profile automatically. Revoked, changed, or
 smaller offerings are excluded; stale client discovery cannot waive that check.
-The provider implementation must refresh discovery before metadata expires. The adapter
+The provider refreshes discovery to keep routing, limits, and revocation state current.
+A reconnect to the same deployment reuses Cloud's saved verification; time alone
+does not invalidate it. The adapter
 selects text input and disables optional reasoning controls; image and reasoning
 features need their own tested runtime compatibility before they are enabled.
 

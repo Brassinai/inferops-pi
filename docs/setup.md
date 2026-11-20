@@ -103,7 +103,7 @@ configuration, without submitting keys in chat messages or command arguments.
 | Gateway changed | Review `models.json` or environment configuration, then run `/login` for that endpoint. |
 | Forbidden project access | Ask the project owner to check permissions. |
 | Empty verified catalog | Check project routing, health, and current operator attestations. |
-| Expired verification or unavailable route | Open `/model` to refresh; the gateway preserves required capabilities. |
+| Changed/revoked verification or unavailable route | Open `/model` to refresh; Cloud reuses saved verification for unchanged deployments, including after reconnect. |
 | Throttling | Wait before submitting another request or review project limits. |
 | Billing hold, balance, or spending limit | Review InferCloud dashboard billing. |
 | Explicit context overflow | Let Pi recover normally, compact, or start a smaller conversation. |
